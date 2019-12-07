@@ -1,0 +1,1203 @@
+---
+title: "Exploratory Data Analysis - N-gram Model"
+author: "Jaime Hernandez"
+date: "October 29, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+First load the data:
+```{r}
+setwd("~/Work/Training/Data Science Coursera/10-Capstone/Final_Project")
+
+library(stringi)
+library(stringr)
+library(ggplot2)
+library(RColorBrewer)
+library(dplyr)
+library(tm)
+library(wordcloud)
+library(rJava)
+library(RWeka)
+library(textclean)
+
+con <- file("./final/en_US/en_US.twitter.txt", open = "rb")
+twitter <- readLines(con, encoding = "UTF-8", skipNul = TRUE)
+close(con)
+
+con <- file("./final/en_US/en_US.news.txt", open = "rb")
+news <- readLines(con, encoding = "UTF-8", skipNul = TRUE)
+close(con)
+
+con <- file("./final/en_US/en_US.blogs.txt", open = "rb")
+blog <- readLines(con, encoding = "UTF-8", skipNul = TRUE)
+close(con)
+
+rm(con)
+
+
+```
+Pre predictive modeling analysis can be looked at in the ngramModelAnalysis.RMD file
+
+
+Sampling data for modeling:
+
+```{r}
+
+# set the seed to make your partition reproducible
+set.seed(123)
+
+##Blogs
+## 75% of the sample size
+smp_size_blog <- floor(0.7 * length(blog))
+
+
+train_ind <- sample(seq_len(length(blog)), size = smp_size_blog)
+
+train.blog <- blog[train_ind]
+test.blog <- blog[-train_ind]
+
+##News
+## 75% of the sample size
+smp_size_news<- floor(0.7 * length(news))
+
+train_ind <- sample(seq_len(length(news)), size = smp_size_news)
+
+train.news <- news[train_ind]
+test.news <- news[-train_ind]
+
+## 75% of the sample size
+smp_size_twitter<- floor(0.7 * length(twitter))
+
+train_ind <- sample(seq_len(length(twitter)), size = smp_size_twitter)
+
+train.twitter <- blog[train_ind]
+test.twitter <- blog[-train_ind]
+
+# save samples
+
+sample.train <-c(train.blog, train.news, train.twitter)
+sample.test <- c(test.blog, test.news, test.twitter)
+
+rm(con)
+rm(blog)
+rm(news)
+rm(sample.test)
+rm(smp_size_blog)
+rm(smp_size_news)
+rm(smp_size_twitter)
+rm(test.blog)
+rm(test.news)
+rm(test.twitter)
+rm(train.blog)
+rm(train.news)
+rm(train.twitter)
+rm(train_ind)
+rm(twitter)
+
+
+# blogsSample <- sample(blog, 6000)
+# newsSample <- sample(news, 6000)
+# twitterSample <- sample(twitter, 6000)
+# 
+# # save samples
+# 
+# sample <-c(blogsSample, newsSample, twitterSample)
+
+```
+
+
+
+Cleaning the data:
+
+Looking into literature, a common approach was created to clean the data and edit the data files. Common punctiation (commas, periods, etc.) and other key character combinations such as smileys were marked to signify beginning/end of sentences. Common english stopwords such as "a, is, etc" were removed in order to get a more robust analysis of the corpora.
+
+To remove profanity, a profanity text file was downloaded from google. All words in the sample corpora that include these profanity words were removed.
+
+This function was written to signify the end of a sentence though it is not needed for this specific assignment.
+
+
+```{r}
+data_dir <- c("~/Work/Training/Data Science Coursera/10-Capstone/Final_Project")
+
+cleanData <- function(data) {
+    
+        library(tm)
+    
+                    # Profanity filtering
+            
+                    f <- file(paste0(data_dir,"/profanity.txt"))
+                    profanities<-readLines(f,encoding="UTF-8")
+                    close(f)
+                    
+                    data <- tolower(data) # convert to lowercase
+                    data <- removeWords(data, profanities)
+                    
+                    #  Separate words connected with - or /
+                    data <- gsub("-", " ", data)
+                    data <- gsub("/", " ", data)
+                    
+                    # Establish end of sentence, abbr, number, email, html
+                    data <- gsub("\\? |\\?$|\\! |\\!$", " EOSS ", data)
+                    data <- gsub("[A-Za-z]\\.[A-Za-z]\\.[A-Za-z]\\.[A-Za-z]\\. |[A-Za-z]\\.[A-Za-z]\\.[A-Za-z]\\. |[A-Za-z]\\.[A-Za-z]\\. ", " EOSS ", data)
+                    data <- gsub("\\. |\\.$", " EOSS ", data)
+                    data <- gsub("[0-9]+"," EOSS ",data)
+                    data <- gsub("\\S+@\\S+","EOSS",data) 
+                    data <- gsub("[Hh}ttp([^ ]+)","EOSS",data) 
+                    data <- gsub("RT | via"," EOSS ",data) # retweets
+                    data <- gsub("@([^ ]+)","EOSS",data) # @people
+                    data <- gsub("[@][a - zA - Z0 - 9_]{1,15}","EOSS",data) # usernames
+                    
+                    # Remove/replace &, @, 'm, 's, 'are, 'll, etc...
+                    data <- gsub(" & ", " and ", data)
+                    data <- gsub(" @ ", " at ", data)
+                    data <- replace_contraction(data)
+                    data <- gsub("'s", "", data) 
+                    data <- gsub("haven't", "have not", data)
+                    data <- gsub("hadn't", "had not", data)
+                    
+                    #Remove emoji's, emoticons
+                    data <- gsub("[^\x01-\x7F]", "", data)
+
+                    data <- removeWords(data, stopwords("english"))
+            
+                    data <- removeNumbers(data) # remove numbers
+                    data <- replace_contraction(data)
+                    pontuacao <-  '[.,!:;?]|:-\\)|:-\\(|:\\)|:\\(|:D|=D|8\\)|:\\*|=\\*|:x|:X|:o|:O|:~\\(|T\\.T|Y\\.Y|S2|<3|:B|=B|=3|:3'
+                    data <- gsub(pontuacao," EOSS ",data) # substitute selected ponctuation (including smileys) with the word END
+                    data <- gsub("$"," EOSS",data) # make sure every line ends with an END
+                    data <- gsub("\\b(\\w+)\\s+\\1\\b","\\1",data) # remove duplicate words in sequence (eg.                
+                    data <- removePunctuation(data) # remove all other punctuation
+                    data <- str_replace_all(data, "[[:punct:]]", "")
+                    data <- stripWhitespace(data) # remove excess white space
+                    data <- gsub("^[[:space:]]","",data) # make sure lines doesn't begin with space
+                    data <- gsub("[[:space:]]$","",data) # make sure lines doesn't end with space
+                    
+                    data <- gsub(" u ", " you ", data)
+                    data <- gsub(" [b-hj-z] ", " ", data)
+        
+
+}
+options(mc.cores = 2)
+
+sample_clean <- cleanData(sample.train)
+# setwd("~/Work/Training/Data Science Coursera/10-Capstone/Final_Project/Project App/datasets")
+
+# saveRDS(sample_clean, "training.clean")
+memory.limit(size = 100000)
+
+# sample_clean <- removeWords(sample_clean, "END" )
+
+c_sample_clean <- VCorpus(VectorSource(sample_clean))
+
+save(c_sample_clean,
+     file = "vcourpus_train70.Rdata")
+
+```
+
+
+```{r}
+
+c_sample_clean_raw <- readRDS("training.clean.rds")
+
+c_sample_clean_raw <- removeWords(c_sample_clean_raw, stopwords("english"))
+
+smp_size<- floor(0.015 * length(c_sample_clean_raw))
+
+
+smp_ind <- sample(seq_len(length(c_sample_clean_raw)), size = smp_size)
+
+sample_clean <- c_sample_clean_raw[smp_ind]
+
+not_empty_lines <- which(!is.na(sample_clean))
+
+sample_clean <- sample_clean[not_empty_lines]
+
+
+c_sample_clean <- VCorpus(VectorSource(sample_clean))
+
+
+
+```
+
+N-gram Modeling
+
+```{r}
+# rm(list = ls())
+gc()
+#STarting with one worker 
+options(mc.cores = 2)
+OnegramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 1, max = 1))
+memory.limit(size = 10000000)
+
+oneGramMatrix<-as.matrix(TermDocumentMatrix(c_sample_clean, control=list(tokenize=OnegramTokenizer)))
+gc()
+onegramRowSum<-rowSums(oneGramMatrix)
+onegram<-data.frame(onegram=names(onegramRowSum),freq=onegramRowSum)
+#removing one grams that include end as this marks the start of a sentence
+onegram = onegram[ !(row.names(onegram) %in% c("eoss")), ]
+
+onegramSorted<-onegram[order(-onegram$freq),]
+
+# Calculate relative cumulative frequencies, and column with row numbers.
+onegramSorted$CumSum <- cumsum(onegramSorted$freq); onegramSorted$RelCumSum <- 100*(onegramSorted$CumSum/sum(onegramSorted$freq))
+onegramSorted$RowNum <- 1:dim(onegramSorted)[1]
+
+onegram.final <-  onegramSorted
+
+# Build frequency of frequency table for subsequent Good-Turing smoothing
+uni.freqfreq<-data.frame(Uni=table(onegramSorted$freq))
+
+```
+
+No let's analyze twograms
+
+```{r}
+TwogramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+                                
+twogramMatrix <- TermDocumentMatrix(c_sample_clean, control=list(tokenize = TwogramTokenizer))
+
+twogramMatrix<- twogramMatrix[!grepl("eoss", twogramMatrix$dimnames$Terms),]
+
+twoFreq <- findFreqTerms(twogramMatrix, lowfreq = 3)
+twogramRowSum <- rowSums(as.matrix(twogramMatrix[twoFreq,]))
+#removing two grams that include end as this marks the start of a sentence
+
+twogramRowSum<-data.frame(twogram=names(twogramRowSum),freq=twogramRowSum)
+# twogramRowSum<- twogramRowSum[!grepl("EOSS", twogramRowSum$twogram),]
+
+twogramRowSum<-twogramRowSum[order(-twogramRowSum$freq),]
+
+# Calculate relative cumulative frequencies, and column with row numbers.
+twogramRowSum$CumSum <- cumsum(twogramRowSum$freq); twogramRowSum$RelCumSum <- 100*(twogramRowSum$CumSum/sum(twogramRowSum$freq))
+twogramRowSum$RowNum <- 1:dim(twogramRowSum)[1]
+
+twogram.final <- twogramRowSum
+
+# Build frequency of frequency table for subsequent Good-Turing smoothing
+bi.freqfreq<-data.frame(Bi=table(twogramRowSum$freq))
+ 
+# 
+# barplot(twogramRowSum[1:20], horiz=F, cex.names=0.8, xlab="twograms",
+#          ylab="Frequency",las=2,names.arg=names(twogramRowSum[1:20]), 
+#          main="Top 20 twogram with the highest frequency")
+
+
+```
+
+
+
+
+Now let's analyze three-grams:
+
+```{r}
+TrigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+                                
+trigramMatrix <- TermDocumentMatrix(c_sample_clean, control=list(tokenize = TrigramTokenizer))
+
+trigramMatrix<- trigramMatrix[!grepl("eoss", trigramMatrix$dimnames$Terms),]
+
+
+triFreq<-findFreqTerms(trigramMatrix, lowfreq = 2)
+trigramRowSum<-rowSums(as.matrix(trigramMatrix[triFreq,]))
+
+trigramRowSum<-data.frame(trigram=names(trigramRowSum),freq=trigramRowSum)
+
+trigramRowSum<-trigramRowSum[order(-trigramRowSum$freq),]
+
+# Calculate relative cumulative frequencies, and column with row numbers.
+trigramRowSum$CumSum <- cumsum(trigramRowSum$freq); trigramRowSum$RelCumSum <- 100*(trigramRowSum$CumSum/sum(trigramRowSum$freq))
+trigramRowSum$RowNum <- 1:dim(trigramRowSum)[1]
+
+trigram.final <- trigramRowSum
+
+# Build frequency of frequency table for subsequent Good-Turing smoothing
+tri.freqfreq<-data.frame(Tri=table(trigramRowSum$freq))
+ 
+
+
+
+
+```
+
+```{r}
+fourgramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 4, max = 4))
+                                
+fourgramMatrix <- TermDocumentMatrix(c_sample_clean, control=list(tokenize = fourgramTokenizer))
+
+fourgramMatrix<- fourgramMatrix[!grepl("eoss", fourgramMatrix$dimnames$Terms),]
+
+
+fourFreq<-findFreqTerms(fourgramMatrix, lowfreq = 2)
+fourgramRowSum<-rowSums(as.matrix(fourgramMatrix[fourFreq,]))
+
+fourgramRowSum<-data.frame(fourgram=names(fourgramRowSum),freq=fourgramRowSum)
+# fourgramRowSum<- fourgramRowSum[!grepl("EOSS", fourgramRowSum$fourgram),]
+
+fourgramRowSum<-fourgramRowSum[order(-fourgramRowSum$freq),]
+
+# Calculate relative cumulative frequencies, and column with row numbers.
+fourgramRowSum$CumSum <- cumsum(fourgramRowSum$freq); fourgramRowSum$RelCumSum <- 100*(fourgramRowSum$CumSum/sum(fourgramRowSum$freq))
+fourgramRowSum$RowNum <- 1:dim(fourgramRowSum)[1]
+
+# Build frequency of frequency table for subsequent Good-Turing smoothing
+four.freqfreq<-data.frame(four=table(fourgramRowSum$freq))
+ 
+fourgram.final <- fourgramRowSum
+
+
+
+
+```
+
+Now Good Turing smoothing
+```{r}
+
+gtsm<-matrix(c(seq(0,6,1),rep(0,28)),nrow=7,ncol=5,
+             dimnames = list(c(seq(0,6,1)),c("count","uni","di","tri", "four")))
+
+# setwd("/Users/nikolaydobrinov/Documents/work/Courses/R/WorkDirectory/Course10")
+
+###
+# 1gram
+###
+# load("./data/en_US/train.sample/Rdata_output/train70pct_1gram_docs.Rdata", verbose=T)
+
+length_1grm <- dim(onegram.final)[1]
+
+# fill up gtsm matrix
+gtsm[1,2] <- uni.freqfreq[1,2]
+gtsm[2:7,2] <- uni.freqfreq[1:6,2]
+
+kFactor <- 6*gtsm[7,2]/gtsm[2,2] # for k = 5
+for (c in 0:5){
+        num<-((c+1)*gtsm[c+2,2]/gtsm[c+1,2])-(c)*kFactor
+        den<- 1-kFactor
+        gtsm[c+1,2]<-num/den
+}
+# rm(sdf1grm, uni.freqfreq)
+
+###
+# 2gram
+###
+# load("./data/en_US/train.sample/Rdata_output/train70pct_2gram_docs.Rdata", verbose=T)
+# fill up gtsm matrix
+gtsm[1,3] <- length_1grm^2 - dim(twogram.final)[1]
+gtsm[2:7,3] <- bi.freqfreq[1:6,2]
+
+kFactor <- 6*gtsm[7,3]/gtsm[2,3] # for k = 5
+for (c in 0:5){
+        num<-(c+1)*gtsm[c+2,3]/gtsm[c+1,3]-(c)*kFactor
+        den<- 1-kFactor
+        gtsm[c+1,3]<-num/den
+}
+# rm(sdf2grm, di.freqfreq)
+
+###
+# 3gram
+###
+# load("./data/en_US/train.sample/Rdata_output/train70pct_3gram_docs.Rdata", verbose=T)
+# fill up gtsm matrix
+gtsm[1,4] <- length_1grm^3 - dim(trigram.final)[1]
+gtsm[2:7,4] <- tri.freqfreq[1:6,2]
+
+kFactor <- 6*gtsm[7,4]/gtsm[2,4] # for k = 5
+for (c in 0:5){
+        num<-(c+1)*gtsm[c+2,4]/gtsm[c+1,4]-(c)*kFactor
+        den<- 1-kFactor
+        gtsm[c+1,4]<-num/den
+}
+# rm(sdf3grm, tri.freqfreq)
+
+###
+# 4gram
+###
+# load("./data/en_US/train.sample/Rdata_output/train70pct_4gram_docs.Rdata", verbose=T)
+# fill up gtsm matrix                                          
+gtsm[1,5] <- length_1grm^4 - dim(fourgram.final)[1]
+gtsm[2:7,5] <- four.freqfreq[1:6,2]
+
+gtsm[(is.na(gtsm))] <- 0
+
+kFactor <- 6*gtsm[7,5]/gtsm[2,5] # for k = 5
+for (c in 0:5){
+        num<-(c+1)*gtsm[c+2,5]/gtsm[c+1,5]-(c)*kFactor
+        den<- 1-kFactor
+        gtsm[c+1,5]<-num/den
+}
+# rm(sdf4grm, four.freqfreq)
+
+
+```
+
+The next block of script uses the Good-Turing smoothing matrix for the counts/frequencies and calculates the adjusted GT counts, and resulting conditional probabilities. The result are the columns GTfreq, and GTprob.
+
+###**************************************************************
+#### calculate adjusted counts and conditional probabilities ####
+###**************************************************************
+```{r}
+
+
+onegram <- onegram.final[,1:2]
+gtsm.1grm <- gtsm[,1:2]
+
+# split the frame in 2 at k=5
+sdf1grm.1to5 <-onegram[onegram$freq < 6,] 
+sdf1grm.6pl <-onegram[onegram$freq >= 6,] 
+
+# calculate discounted counts for c=1to5
+sdf1grm.1to5 <- merge(sdf1grm.1to5,gtsm.1grm, by.x="freq", by.y="count", all.x = TRUE)
+sdf1grm.1to5 <- sdf1grm.1to5[,c(2,1,3)]; names(sdf1grm.1to5) <- c("pred", "freq", "GTfreq")
+
+# calculate discounted counts for c=1to5
+sdf1grm.6pl$GTfreq <- sdf1grm.6pl$freq; names(sdf1grm.6pl) <- c("pred", "freq", "GTfreq")
+
+# rbind and calculate conditional probability
+sdf1grm <- rbind(sdf1grm.6pl,sdf1grm.1to5)
+sdf1grm$GTprob <- sdf1grm$GTfreq / sum(sdf1grm$freq); sdf1grm <- sdf1grm[order(-sdf1grm$GTfreq),]   
+
+sdf1grm$hist <- NA
+sdf1grm$hist.count <- NA
+
+# export
+sdf1grm <- sdf1grm[,c("pred", "hist","hist.count", "GTfreq", "GTprob")]
+# save(sdf1grm, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_1grm.GTfreqprob.docs.Rdata")
+# 
+# sdf1grm <- sdf1grm[,c("pred", "GTprob")]
+# save(sdf1grm, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_1grm.GTprob.docs.Rdata")
+# rm(sdf1grm)
+
+
+###
+# 2gram
+###
+
+# setwd("/Users/nikolaydobrinov/Documents/work/Courses/R/WorkDirectory/Course10")
+# 
+# # load GTS matrix
+# load("./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_gtsm.docs.Rdata", verbose=T)
+# 
+# 
+# load("./data/en_US/train.sample/Rdata_output/train70pct_2gram_docs.Rdata", verbose=T)
+twogram <- twogram.final[,1:2]
+gtsm.2grm <- gtsm[,c(1,3)]
+
+# split the frame in 2 at k=5
+sdf2grm.1to5 <-twogram[twogram$freq < 6,] 
+sdf2grm.6pl <-twogram[twogram$freq >= 6,] 
+
+# calculate discounted counts for c=1to5
+sdf2grm.1to5 <- merge(sdf2grm.1to5,gtsm.2grm, by.x="freq", by.y="count", all.x = TRUE)
+sdf2grm.1to5 <- sdf2grm.1to5[,c(2,1,3)]; names(sdf2grm.1to5) <- c("TwoGram", "freq", "GTfreq")
+
+# calculate discounted counts for c=6pl
+sdf2grm.6pl$GTfreq <- sdf2grm.6pl$freq; names(sdf2grm.6pl) <- c("TwoGram", "freq", "GTfreq")
+
+# rbind and calculate conditional probability
+sdf2grm <- rbind(sdf2grm.6pl,sdf2grm.1to5); sdf2grm <- sdf2grm[order(-sdf2grm$GTfreq),]
+
+# extract 1grams from first word in two-gram, w1
+sdf2grm$hist<-sub(" .*","",sdf2grm$TwoGram)
+# extract 1grams from last word in twogram, w2
+sdf2grm$pred<-sub(".* ","",sdf2grm$TwoGram)
+
+# Calculate conditional probabilities
+library(dplyr)
+        # data frame with history data
+        hist <- as.data.frame(sdf2grm[,c("hist","freq")])
+        
+        # calculate w1 group counts
+        hist.gr <- hist %>% group_by(hist) %>% summarise(hist.count = sum(freq)) %>% arrange(-hist.count) %>% as.data.frame()
+
+        # left join the w1.gr counts
+        sdf2grm <- merge(sdf2grm,hist.gr, by="hist" , all.x = TRUE)
+        
+        # 2 gram conditional probability
+        sdf2grm$GTprob <-sdf2grm$GTfreq / sdf2grm$hist.count
+        sdf2grm <- sdf2grm[order(sdf2grm$hist, -sdf2grm$GTprob),]
+        
+        rm(hist, hist.gr)
+        
+        sdf2grm <- sdf2grm[,c(1,5,6,4,7)]
+        sdf2gram.good <- sdf2grm
+        
+# # export
+# 
+# save(sdf2grm, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_2grm.GTfreqprob.docs.Rdata")
+#      
+# sdf2grm <- sdf2grm[,c("hist", "pred","GTprob")]
+# save(sdf2grm, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_2grm.GTprob.docs.Rdata")
+#         
+# rm(sdf2grm)
+
+###
+# 3gram
+###
+
+# setwd("/Users/nikolaydobrinov/Documents/work/Courses/R/WorkDirectory/Course10")
+# 
+# # load GTS matrix
+# load("./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_gtsm.docs.Rdata", verbose=T)
+# 
+# 
+# load("./data/en_US/train.sample/Rdata_output/train70pct_3gram_docs.Rdata", verbose=T)
+
+trigram <- trigram.final[,1:2]
+gtsm.3grm <- gtsm[,c(1,4)]
+
+# split the frame in 2 at k=5
+sdf3grm.1to5 <-trigram[trigram$freq < 6,] 
+sdf3grm.6pl <-trigram[trigram$freq >= 6,] 
+# rm(sdf3grm)
+
+# calculate discounted counts for c=1to5
+sdf3grm.1to5 <- merge(sdf3grm.1to5,gtsm.3grm, by.x="freq", by.y="count", all.x = TRUE)
+sdf3grm.1to5 <- sdf3grm.1to5[,c(2,1,3)]; names(sdf3grm.1to5) <- c("TriGram", "freq", "GTfreq")
+
+# calculate discounted counts for c=6pl
+sdf3grm.6pl$GTfreq <- sdf3grm.6pl$freq; names(sdf3grm.6pl) <- c("TriGram", "freq", "GTfreq")
+
+# rbind and calculate conditional probability
+sdf3grm <- rbind(sdf3grm.6pl,sdf3grm.1to5); sdf3grm <- sdf3grm[order(-sdf3grm$GTfreq),]
+
+
+# extract 2grams from first words in trigram
+DiGram<-sub(" ","#",sdf3grm$TriGram)
+DiGram<-sub(" .*","",DiGram)
+sdf3grm$hist <- sub("#"," ",DiGram) # w12
+rm(DiGram)
+
+# extract 1grams from last word in trigram
+sdf3grm$pred <- sub(".* ","",sdf3grm$TriGram) # w3
+
+
+# Calculate conditional probabilities
+library(dplyr)
+        # data frame with history data
+        hist <- as.data.frame(sdf3grm[,c("hist","freq")])
+
+        # calculate w1 group counts
+        hist.gr <- hist %>% group_by(hist) %>% summarise(hist.count = sum(freq)) %>% arrange(-hist.count) %>% as.data.frame()
+
+        # left join the w1.gr counts
+        sdf3grm <- merge(sdf3grm,hist.gr, by="hist" , all.x = TRUE)
+
+        # 3 gram conditional probability
+        sdf3grm$GTprob <-sdf3grm$GTfreq / sdf3grm$hist.count
+        sdf3grm <- sdf3grm[order(sdf3grm$hist, -sdf3grm$GTprob),]
+
+        rm(hist, hist.gr)
+
+        sdf3grm <- sdf3grm[,c(1,5,6,4,7)]
+        
+
+# # export
+#         
+# save(sdf3grm, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_3grm.GTfreqprob.docs.Rdata")
+# sdf3grm.2pl<-sdf3grm[which(sdf3grm$GTfreq>1),]
+# save(sdf3grm.2pl, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_3grm.2pl.GTfreqprob.docs.Rdata")
+# 
+# sdf3grm <- sdf3grm[,c("hist", "pred","GTprob")]
+# save(sdf3grm, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_3grm.GTprob.docs.Rdata")
+# sdf3grm.2pl <- sdf3grm.2pl[,c("hist", "pred","GTprob")]
+# save(sdf3grm.2pl, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_3grm.2pl.GTprob.docs.Rdata")
+# 
+# rm(sdf3grm,sdf3grm.2pl)
+#         
+# ###
+# # 4gram
+# ###
+# 
+# # The 4 gram is a large data set and has to be processed in pieces. 
+# 
+# setwd("/Users/nikolaydobrinov/Documents/work/Courses/R/WorkDirectory/Course10")
+# 
+# # load GTS matrix
+# load("./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_gtsm.docs.Rdata", verbose=T)
+# 
+# load("./data/en_US/train.sample/Rdata_output/train70pct_4gram_docs.Rdata", verbose=T)
+
+fourgram <- fourgram.final[,1:2]
+gtsm.4grm <- gtsm[,c(1,5)]
+
+# split the data.frame in 2 at k=5, and pre-process separately, then aggregate
+sdf4grm.1to5 <-fourgram[fourgram$freq < 6,] 
+sdf4grm.6pl <-fourgram[fourgram$freq >= 6,] 
+
+# calculate discounted counts for c=1to5
+sdf4grm.1to5 <- merge(sdf4grm.1to5,gtsm.4grm, by.x="freq", by.y="count", all.x = TRUE)
+sdf4grm.1to5 <- sdf4grm.1to5[,c(2,1,3)]; names(sdf4grm.1to5) <- c("FourGram", "freq", "GTfreq")
+
+# calculate discounted counts for c=6pl
+sdf4grm.6pl$GTfreq <- sdf4grm.6pl$freq; names(sdf4grm.6pl) <- c("FourGram", "freq", "GTfreq")
+
+# rbind and calculate conditional probability
+sdf4grm <- rbind(sdf4grm.6pl,sdf4grm.1to5); sdf4grm <- sdf4grm[order(-sdf4grm$GTfreq),]
+# 
+# # save and reload to save memory
+# save(sdf4grm, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.docs_interm.Rdata")
+# 
+# load("./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.docs_interm.Rdata")
+# 
+# # split data.frame into three parts for the next procedure, and preprocess each part separately
+# # 
+# # # part 1
+# # load("./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.docs_interm.Rdata")
+# sdf4grm <- sdf4grm[1:(ceiling(0.33*(dim(sdf4grm)[1]))),]
+# 
+# # part 2
+# load("./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.docs_interm.Rdata")
+# sdf4grm <- sdf4grm[(ceiling(0.33*(dim(sdf4grm)[1]))+1):(ceiling(0.66*(dim(sdf4grm)[1]))),]
+# 
+# # part 3
+# load("./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.docs_interm.Rdata")
+# sdf4grm <- sdf4grm[(ceiling(0.66*(dim(sdf4grm)[1]))+1):dim(sdf4grm)[1],]
+
+# extract 3grams from first words in fourgram
+TriGram<-sub(" ","#",sdf4grm$FourGram)
+TriGram<-sub(" ","#",TriGram)
+TriGram<-sub(" .*","",TriGram)
+sdf4grm$hist <- gsub("#"," ",TriGram)
+rm(TriGram)
+
+# extract 1grams from last word in fourgram
+sdf4grm$pred <- sub(".* ","",sdf4grm$FourGram)
+# 
+# 
+# save(sdf4grm, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.docs_p3.Rdata")
+# # save(sdf4grm, 
+# #      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.docs_p2.Rdata")
+# # save(sdf4grm, 
+# #      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.docs_p1.Rdata")
+# rm(sdf4grm)
+# 
+# # aggregate 4gram
+# library(R.utils); 
+# sdf4grm.p1 <- loadToEnv("./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.docs_p1.Rdata")[["sdf4grm"]]
+# sdf4grm.p1 <- sdf4grm.p1[,2:5]
+# sdf4grm.p2 <- loadToEnv("./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.docs_p2.Rdata")[["sdf4grm"]]
+# sdf4grm.p2 <- sdf4grm.p2[,2:5]
+# sdf4grm.p3 <- loadToEnv("./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.docs_p3.Rdata")[["sdf4grm"]]
+# sdf4grm.p3 <- sdf4grm.p3[,2:5]
+# 
+# sdf4grm <- rbind(sdf4grm.p1, sdf4grm.p2)
+# rm(sdf4grm.p1,sdf4grm.p2)
+# sdf4grm <- rbind(sdf4grm, sdf4grm.p3)
+# # rm(sdf4grm.p3)
+# 
+# save(sdf4grm, "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.docs_p123aggr.Rdata")
+
+# Calculate conditional probabilities
+library(dplyr)
+        # data frame with history data
+        hist <- as.data.frame(sdf4grm[,c("hist","freq")])
+
+        # calculate w1 group counts
+        hist.gr <- hist %>% group_by(hist) %>% summarise(hist.count = sum(freq)) %>% arrange(-hist.count) %>% as.data.frame()
+
+        # left join the w1.gr counts
+        sdf4grm <- merge(sdf4grm,hist.gr, by="hist" , all.x = TRUE)
+
+        # 3 gram conditional probability
+        sdf4grm$GTprob <-sdf4grm$GTfreq / sdf4grm$hist.count
+        sdf4grm <- sdf4grm[order(sdf4grm$hist, -sdf4grm$GTprob),]
+
+        rm(hist, hist.gr)
+
+        sdf4grm <- sdf4grm[,c(1,5,6,4,7)]
+
+        
+        
+        #Saving all data files for app
+        
+        
+    saveRDS(sdf1grm, "./datasets/OneGramFinal.rds")
+    saveRDS(sdf2grm, "./datasets/TwoGramFinal.rds")
+    saveRDS(sdf3grm, "./datasets/TriGramFinal.rds")
+    saveRDS(sdf4grm, "./datasets/FourGramFinal.rds")
+# # export
+# 
+# save(sdf4grm, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.GTfreqprob.docs.Rdata")
+# sdf4grm.2pl<-sdf4grm[which(sdf4grm$GTfreq>0.8),]
+# save(sdf4grm.2pl, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.2pl.GTfreqprob.docs.Rdata")
+# 
+# sdf4grm <- sdf4grm[,c("hist", "pred","GTprob")]
+# save(sdf4grm, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.GTprob.docs.Rdata")
+# sdf4grm.2pl <- sdf4grm.2pl[,c("hist", "pred","GTprob")]
+# save(sdf4grm.2pl, 
+#      file = "./data/en_US/train.sample/Rdata_output/CondP_and_GoodTuring/train70pct_4grm.2pl.GTprob.docs.Rdata")
+# 
+# rm(sdf4grm,sdf4grm.2pl)
+
+
+
+
+
+
+```
+
+
+```{r}
+###****************************************************
+# function to clean a phrase ####
+###****************************************************
+
+cleanInput <-function(input) {
+        # 1. Separate words connected with - or /
+        input <- gsub("-", " ", input)
+        input <- gsub("/", " ", input)
+        
+        # 2. Establish end of sentence, abbr, number, email, html
+        input <- gsub("\\? |\\?$|\\! |\\!$", " EEOSS ", input)
+        input <- gsub("[A-Za-z]\\.[A-Za-z]\\.[A-Za-z]\\.[A-Za-z]\\. |[A-Za-z]\\.[A-Za-z]\\.[A-Za-z]\\. |[A-Za-z]\\.[A-Za-z]\\. ", " AABRR ", input)
+        input <- gsub("\\. |\\.$", " EEOSS ", input)
+        input <- gsub("[0-9]+"," NNUMM ",input)
+        input <- gsub("\\S+@\\S+","EEMAILL",input) 
+        input <- gsub("[Hh}ttp([^ ]+)","HHTMLL",input) 
+        input <- gsub("RT | via"," RTVIA ",input) # retweets
+        input <- gsub("@([^ ]+)","ATPPLE",input) # @people
+        input <- gsub("[@][a - zA - Z0 - 9_]{1,15}","UUSRNMSS",input) # usernames
+        
+        # 3. to lower
+        input <- tolower(input)
+        
+        # 4. Remove/replace &, @, 'm, 's, 'are, 'll, etc...
+        input <- gsub(" & ", " and ", input)
+        input <- gsub(" @ ", " at ", input)
+        input <- replace_contraction(input)
+        input <- gsub("'s", "", input) 
+        input <- gsub("haven't", "have not", input)
+        input <- gsub("hadn't", "had not", input)
+        
+        # 5. Remove emoji's, emoticons
+        input <- gsub("[^\x01-\x7F]", "", input)
+        
+        # 6. Remove g, mg, lbs etc; removes all single letters except "a" and "i"
+        
+        input <- gsub(" [1-9]+g ", " ", input) # grams
+        input <- gsub(" [1-9]+mg ", " ", input) # miligrams, etc
+        input <- gsub(" [1-9]+kg ", " ", input)
+        input <- gsub(" [1-9]+lbs ", " ", input)
+        input <- gsub(" [1-9]+s ", " ", input) # seconds, etc
+        input <- gsub(" [1-9]+m ", " ", input)
+        input <- gsub(" [1-9]+h ", " ", input)
+        input <- gsub(" +g ", " ", input) # grams
+        input <- gsub(" +mg ", " ", input) # miligrams, etc
+        input <- gsub(" +kg ", " ", input)
+        input <- gsub(" +lbs ", " ", input)
+        input <- gsub(" +s ", " ", input) # seconds, etc
+        input <- gsub(" +m ", " ", input)
+        input <- gsub(" +h ", " ", input)
+        input <- gsub(" +lbs ", " ", input)
+        input <- gsub(" +kg ", " ", input)
+        
+        # 7. remove punctuation
+        input <- gsub("[^[:alnum:][:space:]\']", "",input)
+        # input <- gsub("""", "", input)
+        input <- gsub("''", "", input)
+        input <- gsub("'", "", input)
+        input <- gsub("'", "", input)
+        
+        # 8. remove all single letters eccept i and a
+        input <- gsub(" u ", " you ", input)
+        input <- gsub(" [b-hj-z] ", " ", input)
+        
+        # 9. remove profanity
+        input <- removeWords(input, bw.data[,1])
+        
+        # 10. remove extra spaces
+        # input <- gsub("^[ ]{1,10}","",input)
+        # input <- gsub("[ ]{2,10}"," ",input)
+        input <- stripWhitespace(input)
+        # remove space at end of phrase
+        input <- gsub(" $", "", input)
+        return(input)
+}
+# The next 4 script blocks are functions that execute Katz backoff from a differnet starting ngram level. Katz alpha is calculated within these functions wherever this is necessary.
+
+###*****************************************************
+### function to execute katz back-off from a 1 gram ####
+###*****************************************************
+
+predict.1grm <- function(OneGram){
+
+prediction <- OneGram[, c("pred","GTprob","hist", "GTfreq","GTprob")]
+names(prediction) <- c("Predicted", "Katz Prob", "History", "GoodTuring Freq", "GoodTuring Prob")
+
+return(prediction)
+}
+###*****************************************************
+### function to execute katz back-off from a 2 gram ####
+###*****************************************************
+
+# 1. extract the hist from 2 gram that corresponds to gram2.w1
+# 2. extract 1grams
+# 3. calculate alpha
+# 4. Sort 2 and 1 grams by Katz prob, and create table to output
+
+predict.2grm <- function(TwoGram, OneGram, gram2.w1){
+        
+        # subset from gram 2 where hist matches gram2.w1
+        hist.gram2.match <- TwoGram[which(TwoGram$hist==gram2.w1),]
+        
+        # subset gram 1 into words predicted by gram 2 or not predicted
+        gr1.in.gr2 <- OneGram[OneGram$pred %in% hist.gram2.match$pred,]
+        gr1.notin.gr2 <- OneGram[!(OneGram$pred %in% hist.gram2.match$pred),]
+        
+        # calculate alpha for gram 1(call gama the denominator of alpha)
+        beta.gr1 <- 1- sum(hist.gram2.match$GTprob)
+        gama.gr1 <- 1 - sum(gr1.in.gr2$GTprob)
+        alpha.gr1 <- beta.gr1 / gama.gr1
+        
+        # Calculate KatzProb for gram 1
+        gr1.notin.gr2$Kprob <- gr1.notin.gr2$GTprob * alpha.gr1
+        # Calculate KatzProb for gram 2
+        hist.gram2.match$Kprob <- hist.gram2.match$GTprob
+        
+        # rbind gr1 and gr matches, and sort
+        prediction <- rbind(hist.gram2.match[1:1000,],gr1.notin.gr2[1:1000,])
+        prediction <- prediction[order(-prediction$Kprob),]
+        prediction <- prediction[,c("pred", "Kprob", "hist", "GTfreq","GTprob")]
+        names(prediction) <- c("Predicted", "Katz Prob", "History", "GoodTuring Freq", "GoodTuring Prob")
+        
+        rm(hist.gram2.match, gr1.in.gr2, gr1.notin.gr2, beta.gr1, gama.gr1, alpha.gr1)
+        
+        return(prediction)        
+}
+
+
+###*****************************************************
+### function to execute katz back-off from a 3 gram ####
+###*****************************************************
+
+predict.3grm <- function(TriGram,TwoGram, OneGram, gram3.w12, gram2.w1){
+        
+        # gram 3 match and backoff to gram 2
+        
+        # subset from gram 3 where hist matches gram3.w12
+        hist.gram3.match <- TriGram[which(TriGram$hist==gram3.w12),]
+        
+        # subset from gram 2 where hist matches gram2.w1
+        hist.gram2.match <- TwoGram[which(TwoGram$hist==gram2.w1),]
+        
+        # subset gram 2 into words predicted by gram 3 or not predicted
+        gr2.in.gr3 <- hist.gram2.match[hist.gram2.match$pred %in% hist.gram3.match$pred,]
+        gr2.notin.gr3 <- hist.gram2.match[!(hist.gram2.match$pred %in% hist.gram3.match$pred),]
+        
+        # calculate alpha for gram 2(call gama the denominator of alpha)
+        beta.gr2 <- 1- sum(hist.gram3.match$GTprob)
+        gama.gr2 <- 1 - sum(gr2.in.gr3$GTprob)
+        alpha.gr2 <- beta.gr2 / gama.gr2
+        
+        # Calculate KatzProb (Kprob) for gram 2
+        gr2.notin.gr3$Kprob <- gr2.notin.gr3$GTprob * alpha.gr2
+        # Calculate KatzProb for gram 3
+        hist.gram3.match$Kprob <- hist.gram3.match$GTprob
+        
+        #### backoff to gram 1
+       
+        # subset gram 1 into words predicted by gram 2 or not predicted
+        gr1.in.gr2 <- OneGram[OneGram$pred %in% hist.gram2.match$pred,]
+        gr1.notin.gr2 <- OneGram[!(OneGram$pred %in% hist.gram2.match$pred),]
+        
+        # calculate alpha for gram 1(call gama the denominator of alpha)
+        beta.gr1 <- 1- sum(hist.gram2.match$GTprob)
+        gama.gr1 <- 1 - sum(gr1.in.gr2$GTprob)
+        alpha.gr1 <- beta.gr1 / gama.gr1
+        
+        # Calculate KatzProb for gram 1
+        gr1.notin.gr2$Kprob <- gr1.notin.gr2$GTprob * alpha.gr1 * alpha.gr2
+        # Calculate KatzProb for gram 2
+        
+        # rbind gr1 and gr matches, and sort
+        prediction <- rbind(hist.gram3.match[1:1000,],gr2.notin.gr3[1:1000,] ,gr1.notin.gr2[1:1000,])
+        prediction <- prediction[order(-prediction$Kprob),]
+        prediction <- prediction[,c("pred", "Kprob", "hist", "GTfreq","GTprob")]
+        names(prediction) <- c("Predicted", "Katz Prob", "History", "GoodTuring Freq", "GoodTuring Prob")
+        
+        rm(hist.gram3.match, hist.gram2.match, gr2.in.gr3, gr2.notin.gr3, 
+           gr1.in.gr2, gr1.notin.gr2, beta.gr2, gama.gr2, alpha.gr2,
+           beta.gr1, gama.gr1, alpha.gr1)
+        
+        return(prediction)
+}
+###*****************************************************
+### function to execute katz back-off from a 4 gram ####
+###*****************************************************
+
+predict.4grm <- function(FourGram, TriGram,TwoGram, OneGram, gram4.w123, gram3.w12, gram2.w1){
+        
+        # gram 4 match and backoff to gram 1
+        
+        # subset from gram 4 where hist matches gram4.w123
+        hist.gram4.match <- FourGram[which(FourGram$hist==gram4.w123),]
+        
+        # subset from gram 3 where hist matches gram3.w12
+        hist.gram3.match <- TriGram[which(TriGram$hist==gram3.w12),]
+        
+        # subset gram 3 into words predicted by gram 4 or not predicted
+        gr3.in.gr4 <- hist.gram3.match[hist.gram3.match$pred %in% hist.gram4.match$pred,]
+        gr3.notin.gr4 <- hist.gram3.match[!(hist.gram3.match$pred %in% hist.gram4.match$pred),]
+        
+        # calculate alpha for gram 2(call gama the denominator of alpha)
+        beta.gr3 <- 1- sum(hist.gram4.match$GTprob)
+        gama.gr3 <- 1 - sum(gr3.in.gr4$GTprob)
+        alpha.gr3 <- beta.gr3 / gama.gr3
+        
+        # Calculate KatzProb (Kprob) for gram 3
+        gr3.notin.gr4$Kprob <- gr3.notin.gr4$GTprob * alpha.gr3
+        # Calculate KatzProb for gram 4
+        hist.gram4.match$Kprob <- hist.gram4.match$GTprob
+        
+        # gram 3 match and backoff to gram 2
+        
+        # subset from gram 2 where hist matches gram2.w1
+        hist.gram2.match <- TwoGram[which(TwoGram$hist==gram2.w1),]
+        
+        # subset gram 2 into words predicted by gram 3 or not predicted
+        gr2.in.gr3 <- hist.gram2.match[hist.gram2.match$pred %in% hist.gram3.match$pred,]
+        gr2.notin.gr3 <- hist.gram2.match[!(hist.gram2.match$pred %in% hist.gram3.match$pred),]
+        
+        # calculate alpha for gram 2(call gama the denominator of alpha)
+        beta.gr2 <- 1- sum(hist.gram3.match$GTprob)
+        gama.gr2 <- 1 - sum(gr2.in.gr3$GTprob)
+        alpha.gr2 <- beta.gr2 / gama.gr2
+        
+        # Calculate KatzProb (Kprob) for gram 2
+        gr2.notin.gr3$Kprob <- gr2.notin.gr3$GTprob * alpha.gr2 * alpha.gr3
+        
+        #### backoff to gram 1
+        
+        # subset gram 1 into words predicted by gram 2 or not predicted
+        gr1.in.gr2 <- OneGram[OneGram$pred %in% hist.gram2.match$pred,]
+        gr1.notin.gr2 <- OneGram[!(OneGram$pred %in% hist.gram2.match$pred),]
+        
+        # calculate alpha for gram 1(call gama the denominator of alpha)
+        beta.gr1 <- 1- sum(hist.gram2.match$GTprob)
+        gama.gr1 <- 1 - sum(gr1.in.gr2$GTprob)
+        alpha.gr1 <- beta.gr1 / gama.gr1
+        
+        # Calculate KatzProb for gram 1
+        gr1.notin.gr2$Kprob <- gr1.notin.gr2$GTprob * alpha.gr1 * alpha.gr2 * alpha.gr3
+        # Calculate KatzProb for gram 2
+        
+        # rbind gr1 and gr matches, and sort
+        prediction <- rbind(hist.gram4.match[1:1000,], gr3.notin.gr4[1:1000,], gr2.notin.gr3[1:1000,] ,gr1.notin.gr2[1:1000,])
+        prediction <- prediction[order(-prediction$Kprob),]
+        prediction <- prediction[,c("pred", "Kprob", "hist", "GTfreq","GTprob")]
+        names(prediction) <- c("Predicted", "Katz Prob", "History", "GoodTuring Freq", "GoodTuring Prob")
+        
+        rm(hist.gram4.match, hist.gram3.match, hist.gram2.match, 
+           gr3.in.gr4, gr3.notin.gr4, gr2.in.gr3, gr2.notin.gr3, 
+           gr1.in.gr2, gr1.notin.gr2, beta.gr3, gama.gr3, alpha.gr3,
+           beta.gr2, gama.gr2, alpha.gr2, beta.gr1, gama.gr1, alpha.gr1)
+        
+        return(prediction)
+}
+
+
+```
+
+
+
+``` {r}
+###***********************************************
+### main function ####
+###***********************************************
+
+predWord.4grm <- function(input, OneGram, TwoGram, TriGram, FourGram){
+        
+        # 1. Check of the phrase is longer than one word
+        # 2. Clean the phrase
+        # 3. Check if the last word in the phrase is a break.word (defined below) and if yes = error
+        # 4. Check if any of the words in the phrase is a break.word (defined below) and if yes 
+        # move to an n-1 gram and repeat step 4 until you find an n-gram with no break words
+        
+        # number of words in user input, pre-cleaning
+        n.words.input <-length(strsplit(input, "\\s+")[[1]])
+        
+        clean.input <- input
+        
+        # error message if no input 
+        if (n.words.input <1) stop("Please input at least one word")    # error handling
+        
+        # clean the input phrase and Count number of words in the phrase
+        # clean.input <- cleanInput(input)
+        clean.input.words <- strsplit(clean.input, "\\s+")[[1]] # vector of the words in the clean input
+        n.words <-length(clean.input.words)
+        
+        # a vector with words that break an ngram if located within the ngram
+        ngram.break <- as.list(c("eeoss", "aabrr", "nnumm", "eemaill", "hhtmll", "rtvia", "atpple", "uusrnmss"))
+        
+        # if the last word is a ngram.break word, something that's not an english word, stop
+        if (any(unlist(lapply(ngram.break, function(x) grepl(x,clean.input.words[n.words]))))) 
+                stop("The last sequence of characters is something other than an English word.\n",
+                     "Please input at least one word.")    # error handling 
+        
+        ###*******************************
+        # phrase is at least 3 words long 
+        ###*******************************
+        
+        # 1. extract 3,2,1 last words from phrase
+        # 2. check longest 3 word extract for break.words. If yes go down to 2 and then 1 word
+        # 3. once a group of words contains no break.words then we execute Katz backoff from this level of ngram
+        # suppose the last 3 words contain a break.word, but the last 2 don't, then
+        # we execute Katz backoff from ngram 3.
+        
+        if (n.words >= 3) {
+                # extract the (n-1) words from ngrams from the last words in the phrase
+                gram4.w123 <- paste(clean.input.words[n.words - 2],
+                                    clean.input.words[n.words - 1],
+                                    clean.input.words[n.words], sep=" ")
+                gram3.w12 <- sub("^[a-z]+ ","",gram4.w123)
+                gram2.w1 <- sub("^[a-z]+ ","",gram3.w12)
+                
+                # if any of the words in the ngram4.w123 is a .ngram.break word, then fail, move to n-1 ngram
+                if ( any(unlist(lapply(ngram.break, function(x) grepl(x,gram4.w123)))) ){
+                        # if any of the words in the ngram3.w12 is a .ngram.break word, then fail, move to n-1 ngram
+                        if ( any(unlist(lapply(ngram.break, function(x) grepl(x,gram3.w12)))) ){
+                                ### execute from a 2 gram as the two gram has already been checked for EOS breakwords
+                                match.w1.count <- sum(TwoGram[which(TwoGram$hist==gram2.w1),"GTfreq"])
+                                if (match.w1.count == 0) { # match.w1.count=0 in gram2 therefore use Katz backoff to gram1
+                                        # export matches from OneGram table
+                                        prediction <- predict.1grm(OneGram)
+                                }
+                                
+                                else { # export matches from TwoGram$hist==gram2.w1
+                                        prediction <- predict.2grm(TwoGram, OneGram, gram2.w1)
+                                }
+                                
+                        }
+                        else { ### execute from a 3 gram, Katz back-off 
+                                match.w12.count <- sum(TriGram[which(TriGram$hist==gram3.w12),"GTfreq"])
+                                if (match.w12.count == 0) { # match.w12.count=0 therefore use Katz backoff to gram2.w1
+                                        match.w1.count <- sum(TwoGram[which(TwoGram$hist==gram2.w1),"GTfreq"])
+                                        if (match.w1.count == 0) { # match.w1.count=0 in gram2 therefore use Katz backoff to gram1
+                                                # export matches from OneGram table
+                                                prediction <- predict.1grm(OneGram)
+                                        }
+                                        
+                                        else { # export matches from TwoGram$hist==gram2.w1
+                                                prediction <- predict.2grm(TwoGram, OneGram, gram2.w1)
+                                        }
+                                }
+                                else { # export matches from TriGram$w12==gram3.w12
+                                        prediction <- predict.3grm(TriGram,TwoGram, OneGram, gram3.w12, gram2.w1)            
+                                }              
+                        }
+                        
+                } else { # There are no break words in 4gram gram4.w123.
+                       # execute from a 4 gram, Katz back-of
+                        
+                        ###
+                        # start checking for matches and working backwards w Katz back-off when necessary
+                        ###
+                        
+                        # Count how many times we find the gram4.w123 in the 4 gram table, in FourGram$w123
+                        match.w123.count <- sum(FourGram[which(FourGram$hist==gram4.w123),"GTfreq"])
+                        
+                        if (match.w123.count == 0) { # match.w123.count=0 therefore use Katz backoff to gram3.w12
+                                match.w12.count <- sum(TriGram[which(TriGram$hist==gram3.w12),"GTfreq"])
+                                if (match.w12.count == 0) { # match.w12.count=0 therefore use Katz backoff to gram2.w1
+                                        match.w1.count <- sum(TwoGram[which(TwoGram$hist==gram2.w1),"GTfreq"])
+                                        if (match.w1.count == 0) { # match.w1.count=0 in gram2 therefore use Katz backoff to gram1
+                                                # export matches from OneGram table
+                                                prediction <- predict.1grm(OneGram)
+                                                 }
+                                        
+                                        else { # export matches from TwoGram$hist==gram2.w1
+                                                prediction <- predict.2grm(TwoGram, OneGram, gram2.w1)
+                                        }
+                                }
+                                else { # export matches from TriGram$w12==gram3.w12
+                                        prediction <- predict.3grm(TriGram,TwoGram, OneGram, gram3.w12, gram2.w1)            
+                                }        
+                        }
+                        else { # export matches from FourGram$w123==gram4.w123
+                                prediction <- predict.4grm(FourGram, TriGram,TwoGram, OneGram, gram4.w123, gram3.w12, gram2.w1)
+                        }
+                }
+        }
+                ###*********************
+                # phrase is 2 words long
+                ###*********************
+                else if (n.words==2 ){
+                        # extract the (n-1) words from ngrams from the last words in the phrase
+                        gram3.w12 <- clean.input
+                        gram2.w1 <- sub("^[a-z]+ ","",gram3.w12)
+                        
+                        # if any of the words in the ngram3.w12 is a .ngram.break word, then fail, move to n-1 ngram
+                        if ( any(unlist(lapply(ngram.break, function(x) grepl(x,gram3.w12)))) ){
+                                ### execute from a 2 gram as the two gram has already been checked for EOS breakwords
+                                match.w1.count <- sum(TwoGram[which(TwoGram$hist==gram2.w1),"GTfreq"])
+                                if (match.w1.count == 0) { # match.w1.count=0 in gram2 therefore use Katz backoff to gram1
+                                        # export matches from OneGram table
+                                        prediction <- predict.1grm(OneGram)
+                                }
+                                
+                                else { # export matches from TwoGram$hist==gram2.w1
+                                        prediction <- predict.2grm(TwoGram, OneGram, gram2.w1)
+                                }
+                                
+                        }
+                        else { ### execute from a 3 gram, Katz back-off 
+                                match.w12.count <- sum(TriGram[which(TriGram$hist==gram3.w12),"GTfreq"])
+                                if (match.w12.count == 0) { # match.w12.count=0 therefore use Katz backoff to gram2.w1
+                                        match.w1.count <- sum(TwoGram[which(TwoGram$hist==gram2.w1),"GTfreq"])
+                                        if (match.w1.count == 0) { # match.w1.count=0 in gram2 therefore use Katz backoff to gram1
+                                                # export matches from OneGram table
+                                                prediction <- predict.1grm(OneGram)
+                                        }
+                                        
+                                        else { # export matches from TwoGram$hist==gram2.w1
+                                                prediction <- predict.2grm(TwoGram, OneGram, gram2.w1)
+                                        }
+                                }
+                                else { # export matches from TriGram$w12==gram3.w12
+                                        prediction <- predict.3grm(TriGram,TwoGram, OneGram, gram3.w12, gram2.w1)            
+                                }              
+                        }
+                        
+                }
+                ###*************************
+                # phrase is just 1 word long 
+                ###*************************
+                else {
+                        gram2.w1 <- clean.input
+        
+                        ### execute from a 2 gram as the two gram has already been checked for EOS breakwords
+                        match.w1.count <- sum(TwoGram[which(TwoGram$hist==gram2.w1),"GTfreq"])
+                        if (match.w1.count == 0) { # match.w1.count=0 in gram2 therefore use Katz backoff to gram1
+                                # export matches from OneGram table
+                                prediction <- predict.1grm(OneGram)
+                        }
+                        
+                        else { # export matches from TwoGram$hist==gram2.w1
+                                prediction <- predict.2grm(TwoGram, OneGram, gram2.w1)
+                        }
+                }
+return(prediction)       
+}
+
+
+
+```
+
